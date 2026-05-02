@@ -60,17 +60,19 @@ def search_chunks(query: str, chunks: list[dict[str, Any]], top_k: int = 5) -> l
 
     scored: list[dict[str, Any]] = []
     for chunk in chunks:
-        score = score_chunk(chunk, terms)
+        score, direct_hits = score_chunk_with_details(chunk, terms)
         if score <= 0:
             continue
         result = dict(chunk)
         result["score"] = score
+        result["_direct_hits"] = direct_hits
         scored.append(result)
 
     scored.sort(
         key=lambda item: (
             item["score"],
-            len(str(item.get("summary", ""))),
+            item.get("_direct_hits", 0),
+            _content_term_frequency(item, terms),
             -len(str(item.get("content", ""))),
         ),
         reverse=True,
@@ -79,7 +81,12 @@ def search_chunks(query: str, chunks: list[dict[str, Any]], top_k: int = 5) -> l
 
 
 def score_chunk(chunk: dict[str, Any], terms: list[str]) -> int:
+    return score_chunk_with_details(chunk, terms)[0]
+
+
+def score_chunk_with_details(chunk: dict[str, Any], terms: list[str]) -> tuple[int, int]:
     score = 0
+    direct_hits = 0
     doc_title = _as_text(chunk.get("doc_title", "")).lower()
     source_pdf = _as_text(chunk.get("source_pdf", "")).lower()
     section = _as_text(chunk.get("section", "")).lower()
@@ -89,28 +96,42 @@ def score_chunk(chunk: dict[str, Any], terms: list[str]) -> int:
 
     for term in terms:
         lowered = term.lower()
+        variants = _term_variants(lowered)
         if lowered in section:
             score += 8
         if any(lowered in keyword for keyword in keywords):
             score += 6
-        if lowered in summary:
-            score += 4
+        summary_hits = _variant_frequency(summary, variants)
+        content_hits = _variant_frequency(content, variants)
+        section_hits = _variant_frequency(section, variants)
+        if summary_hits:
+            score += 4 + min(summary_hits * 2, 8)
+            direct_hits += summary_hits
+        if section_hits:
+            score += min(section_hits * 2, 6)
+            direct_hits += section_hits
         if lowered in doc_title:
             score += 3
         if lowered in source_pdf:
             score += 2
-        score += min(content.count(lowered), 5)
+        if content_hits:
+            # 같은 섹션 안에서는 본문 직접 일치가 chunk 순위를 가르는 핵심 신호다.
+            score += 5 + min(content_hits * 3, 24)
+            direct_hits += content_hits
 
     matched_terms = sum(
         1
         for term in terms
-        if term.lower() in f"{doc_title} {source_pdf} {section} {' '.join(keywords)} {summary} {content}"
+        if _variant_frequency(f"{doc_title} {source_pdf} {section} {' '.join(keywords)} {summary} {content}", _term_variants(term.lower()))
     )
     if matched_terms == len(terms) and len(terms) > 1:
         score += 5
+    content_matched_terms = sum(1 for term in terms if _variant_frequency(content, _term_variants(term.lower())))
+    if content_matched_terms >= 2:
+        score += content_matched_terms * 4
     if len(content.strip()) < 30:
         score -= 2
-    return max(score, 0)
+    return max(score, 0), direct_hits
 
 
 def _normalize_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
@@ -132,10 +153,35 @@ def _tokenize(text: str) -> list[str]:
     return unique
 
 
+def _term_variants(term: str) -> list[str]:
+    variants = [term]
+    if re.search(r"[가-힣]", term):
+        variants.extend(
+            [
+                f"{term}됨",
+                f"{term}된",
+                f"{term}하는",
+                f"{term}한다",
+                f"{term}하고",
+                f"{term}하기",
+                f"[{term}]",
+            ]
+        )
+    return list(dict.fromkeys(variants))
+
+
+def _variant_frequency(text: str, variants: list[str]) -> int:
+    return sum(text.count(variant) for variant in variants if variant)
+
+
+def _content_term_frequency(chunk: dict[str, Any], terms: list[str]) -> int:
+    content = _as_text(chunk.get("content", "")).lower()
+    return sum(_variant_frequency(content, _term_variants(term.lower())) for term in terms)
+
+
 def _as_text(value: Any) -> str:
     if value is None:
         return ""
     if isinstance(value, list):
         return " ".join(_as_text(item) for item in value)
     return str(value)
-
