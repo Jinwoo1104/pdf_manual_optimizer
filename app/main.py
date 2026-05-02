@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
         self.worker: ConvertWorker | None = None
         self.loaded_chunks: list[dict] = []
         self.search_results: list[dict] = []
+        self.loaded_chunk_paths: list[Path] = []
 
         self.setWindowTitle("PDF Manual Optimizer - AI 검색용 패키지 변환기")
         self.resize(980, 720)
@@ -165,6 +166,10 @@ class MainWindow(QMainWindow):
         load_row.addWidget(self.chunk_status_label, stretch=1)
         layout.addLayout(load_row)
 
+        self.search_notice_label = QLabel("")
+        self.search_notice_label.setWordWrap(True)
+        layout.addWidget(self.search_notice_label)
+
         query_row = QHBoxLayout()
         self.query_input = QLineEdit()
         self.query_input.setPlaceholderText("질문 또는 검색어를 입력하세요")
@@ -191,6 +196,8 @@ class MainWindow(QMainWindow):
         prompt_button_row = QHBoxLayout()
         self.generate_prompt_button = QPushButton("프롬프트 생성")
         self.copy_prompt_button = QPushButton("클립보드 복사")
+        self.generate_prompt_button.setEnabled(False)
+        self.copy_prompt_button.setEnabled(False)
         self.generate_prompt_button.clicked.connect(self.generate_prompt)
         self.copy_prompt_button.clicked.connect(self.copy_prompt)
         prompt_button_row.addWidget(self.generate_prompt_button)
@@ -304,10 +311,14 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "chunk 로드 실패", str(exc))
             return
 
+        self.loaded_chunk_paths = list(paths)
         self.search_results = []
         self.results_table.setRowCount(0)
         self.prompt_preview.clear()
-        self.chunk_status_label.setText(f"로드된 chunk: {len(self.loaded_chunks)}개 / 파일 {len(paths)}개")
+        self.generate_prompt_button.setEnabled(False)
+        self.copy_prompt_button.setEnabled(False)
+        self.update_chunk_status(paths)
+        self.search_notice_label.setText(self.build_load_notice(paths))
         QMessageBox.information(self, "chunk 로드 완료", f"{len(self.loaded_chunks)}개 chunk를 로드했습니다.")
 
     def run_search(self) -> None:
@@ -323,6 +334,18 @@ class MainWindow(QMainWindow):
         self.populate_results_table(self.search_results)
         if not self.search_results:
             self.prompt_preview.setPlainText("검색 결과가 없습니다.")
+            self.search_notice_label.setText("검색 결과가 없습니다. 다른 표현이나 더 구체적인 키워드로 검색해보세요.")
+            self.generate_prompt_button.setEnabled(False)
+            self.copy_prompt_button.setEnabled(False)
+            return
+
+        top_score = int(self.search_results[0].get("score", 0))
+        if top_score < 15:
+            self.search_notice_label.setText("검색 결과의 관련성이 낮을 수 있습니다.")
+        else:
+            self.search_notice_label.setText("")
+        self.generate_prompt_button.setEnabled(True)
+        self.copy_prompt_button.setEnabled(False)
 
     def populate_results_table(self, results: list[dict]) -> None:
         self.results_table.setRowCount(len(results))
@@ -353,6 +376,7 @@ class MainWindow(QMainWindow):
 
         prompt = build_ai_prompt(self.query_input.text(), selected_results, top_k=5)
         self.prompt_preview.setPlainText(prompt)
+        self.copy_prompt_button.setEnabled(True)
 
     def copy_prompt(self) -> None:
         prompt = self.prompt_preview.toPlainText().strip()
@@ -373,6 +397,32 @@ class MainWindow(QMainWindow):
         self.start_button.setEnabled(enabled)
         self.extract_tables_checkbox.setEnabled(enabled)
         self.extract_images_checkbox.setEnabled(enabled)
+
+    def update_chunk_status(self, paths: list[Path]) -> None:
+        doc_titles = sorted(
+            {
+                str(chunk.get("doc_title") or chunk.get("source_pdf") or "제목 없음")
+                for chunk in self.loaded_chunks
+            }
+        )
+        doc_text = ", ".join(doc_titles[:8])
+        if len(doc_titles) > 8:
+            doc_text += f" 외 {len(doc_titles) - 8}개"
+        self.chunk_status_label.setText(
+            f"로드된 chunk: {len(self.loaded_chunks)}개 / 파일 {len(paths)}개\n"
+            f"문서: {doc_text or '없음'}"
+        )
+
+    def build_load_notice(self, paths: list[Path]) -> str:
+        doc_count = len(
+            {
+                str(chunk.get("doc_title") or chunk.get("source_pdf") or "제목 없음")
+                for chunk in self.loaded_chunks
+            }
+        )
+        if len(paths) == 1 or doc_count == 1:
+            return "현재 1개 매뉴얼만 검색 중입니다. 전체 매뉴얼 검색을 원하면 converted_manuals 폴더를 선택하세요."
+        return ""
 
     def log(self, message: str) -> None:
         self.log_raw(format_log(message))
