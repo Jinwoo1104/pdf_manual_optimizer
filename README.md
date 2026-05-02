@@ -1,6 +1,6 @@
 # PDF Manual Optimizer
 
-회사 프로그램 매뉴얼 PDF를 AI 검색/RAG에 적합한 로컬 패키지로 변환하는 Windows용 GUI 프로그램입니다.
+PDF를 AI 검색/RAG에 적합한 로컬 패키지로 변환하는 Windows용 GUI 프로그램입니다.
 
 ## 주요 기능
 
