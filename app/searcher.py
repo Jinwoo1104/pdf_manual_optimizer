@@ -7,6 +7,27 @@ from typing import Any
 
 
 SEARCH_FIELDS = ("doc_title", "source_pdf", "section", "keywords", "summary", "content")
+QUERY_STOPWORDS = {
+    "없는",
+    "없",
+    "있는",
+    "있",
+    "테스트",
+    "테스트입니다",
+    "알려줘",
+    "알려주세요",
+    "기능",
+    "무엇을",
+    "무엇",
+    "어떻게",
+    "하나요",
+    "있나요",
+    "에서는",
+    "에서",
+    "으로",
+    "하는",
+    "하기",
+}
 
 
 def find_chunks_jsonl_paths(folder: str | Path) -> list[Path]:
@@ -116,8 +137,11 @@ def score_chunk_with_details(chunk: dict[str, Any], terms: list[str]) -> tuple[i
             score += 2
         if content_hits:
             # 같은 섹션 안에서는 본문 직접 일치가 chunk 순위를 가르는 핵심 신호다.
-            score += 5 + min(content_hits * 3, 24)
+            score += 5 + min(content_hits * 2, 12)
             direct_hits += content_hits
+
+        if _section_title_equals_term(section, lowered):
+            score += 50
 
     matched_terms = sum(
         1
@@ -128,7 +152,14 @@ def score_chunk_with_details(chunk: dict[str, Any], terms: list[str]) -> tuple[i
         score += 5
     content_matched_terms = sum(1 for term in terms if _variant_frequency(content, _term_variants(term.lower())))
     if content_matched_terms >= 2:
-        score += content_matched_terms * 4
+        score += content_matched_terms * 8
+    distinct_matched_terms = sum(
+        1
+        for term in terms
+        if _variant_frequency(f"{section} {' '.join(keywords)} {summary} {content}", _term_variants(term.lower()))
+    )
+    if distinct_matched_terms >= 2:
+        score += distinct_matched_terms * 6
     if len(content.strip()) < 30:
         score -= 2
     return max(score, 0), direct_hits
@@ -148,9 +179,20 @@ def _tokenize(text: str) -> list[str]:
     tokens = re.findall(r"[가-힣A-Za-z0-9]{2,}", text)
     unique: list[str] = []
     for token in tokens:
+        token = _normalize_query_token(token)
+        if not token:
+            continue
+        if token in QUERY_STOPWORDS:
+            continue
         if token not in unique:
             unique.append(token)
     return unique
+
+
+def _normalize_query_token(token: str) -> str:
+    if re.search(r"[가-힣]", token):
+        token = re.sub(r"(입니다|합니다|인가요|하나요|나요|에서는|으로는|에게는|에서는|으로|에서|에게|부터|까지|처럼|보다|이나|거나|하고|은|는|을|를|이|가|와|과|에|의)$", "", token)
+    return token
 
 
 def _term_variants(term: str) -> list[str]:
@@ -177,6 +219,11 @@ def _variant_frequency(text: str, variants: list[str]) -> int:
 def _content_term_frequency(chunk: dict[str, Any], terms: list[str]) -> int:
     content = _as_text(chunk.get("content", "")).lower()
     return sum(_variant_frequency(content, _term_variants(term.lower())) for term in terms)
+
+
+def _section_title_equals_term(section: str, term: str) -> bool:
+    title = re.sub(r"^\d+(?:\.\d+)*\.\s+", "", section).strip().lower()
+    return title == term
 
 
 def _as_text(value: Any) -> str:

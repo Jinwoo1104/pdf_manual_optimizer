@@ -340,7 +340,7 @@ class MainWindow(QMainWindow):
             return
 
         top_score = int(self.search_results[0].get("score", 0))
-        if top_score < 15:
+        if top_score < 35:
             self.search_notice_label.setText("검색 결과의 관련성이 낮을 수 있습니다.")
         else:
             self.search_notice_label.setText("")
